@@ -79,6 +79,14 @@ def action_space(actions):
 
 
 def choose(state, goal, history):
+    # Without a TypeSafe key, answer the same questions with one OpenAI-compatible call.
+    # Same questions, same validation, still one request per decision.
+    if os.environ.get("CHOOSER_PROVIDER", "openrouter") == "openrouter" and not os.environ.get(
+        "TYPESAFE_API_KEY"
+    ) and (os.environ.get("CHOOSER_API_KEY") or os.environ.get("TEXT_MODEL_API_KEY")):
+        from .chooser_openrouter import choose_openrouter
+
+        return choose_openrouter(state, goal, history)
     elements, targets, controls = action_space(state["actions"])
     labels = {
         "CLICK": "Click an element, button, menu option, autocomplete suggestion, or calendar day.",
@@ -173,7 +181,7 @@ def field_text(context):
         {
             "model": model,
             "max_tokens": 1024,
-            "response_format": {"type": "json_object"},
+            **( {} if os.environ.get("TEXT_JSON_MODE", "1") == "0" else {"response_format": {"type": "json_object"}}),
             **reasoning,
             "messages": [
                 {"role": "system", "content": TEXT_VALUE},
