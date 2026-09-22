@@ -142,6 +142,28 @@ def browser_operation(request):
                 raise ValueError("Invalid observed node")
             # Code-owned node IDs refer to actual observed elements, never model-generated selectors.
             target = evaluate("""(action => {
+              const replaySelector = e => {
+                if (!e) return null;
+                if (e.id && document.querySelectorAll('#' + CSS.escape(e.id)).length === 1) return '#' + CSS.escape(e.id);
+                const name = e.getAttribute('name');
+                if (name && e.tagName === 'INPUT') {
+                  const sel = e.tagName.toLowerCase() + '[name="' + name + '"]';
+                  if (document.querySelectorAll(sel).length === 1) return sel;
+                }
+                const aria = e.getAttribute('aria-label');
+                if (aria) {
+                  const sel = '[aria-label="' + aria.replace(/"/g, '\\"') + '"]';
+                  if (document.querySelectorAll(sel).length === 1) return sel;
+                }
+                // structural fallback: nth-of-type chain from body
+                let parts = [], node = e;
+                while (node && node.tagName && node !== document.body) {
+                  const idx = [...(node.parentElement?.children || [])].filter(c => c.tagName === node.tagName).indexOf(node) + 1;
+                  parts.unshift(node.tagName.toLowerCase() + ':nth-of-type(' + idx + ')');
+                  node = node.parentElement;
+                }
+                return 'body > ' + parts.join(' > ');
+              };
               const e=window.__jevFast?.nodes.get(action.node);
               if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]') ||
                   !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
@@ -156,7 +178,7 @@ def browser_operation(request):
                 e.dispatchEvent(new Event('input',{bubbles:true}));
                 e.dispatchEvent(new Event('change',{bubbles:true}));
               }
-              return {x,y};
+              return {x,y,selector: replaySelector(e),text: (e.innerText||e.value||"").trim().slice(0,80),tag: e.tagName};
             })(""" + json.dumps(action) + ")")
             if target is None:
                 if kind == "select":
@@ -183,7 +205,7 @@ def browser_operation(request):
                         modifiers=4 if sys.platform == "darwin" else 2,
                     )
                     call("Input.insertText", text=request["text"])
-        return {"executed": action["id"]}
+        return {"executed": action["id"], "selector": (target or {}).get("selector")}
 
     info = evaluate(READ_STATE)
     if info is None:
