@@ -1,6 +1,7 @@
 """Observed actions through Browser Harness; one CDP session, no per-step subprocess."""
 
 import hashlib
+import os
 import json
 import sys
 import time
@@ -25,6 +26,13 @@ class Browser:
         self.call("Emulation.setDeviceMetricsOverride", width=1120, height=780, deviceScaleFactor=1, mobile=False)
         # Keep rAF/menus rendering in an owned background tab, without activating the user's Chrome tab.
         self.call("Emulation.setFocusEmulationEnabled", enabled=True)
+        # The stock headless user agent advertises "HeadlessChrome"; present a normal one instead.
+        ua = os.environ.get(
+            "JEV_USER_AGENT",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+        )
+        if ua:
+            self.call("Emulation.setUserAgentOverride", userAgent=ua, acceptLanguage="en-US,en;q=0.9", platform="MacIntel")
         self.call("Page.navigate", url=url)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
