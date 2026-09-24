@@ -13,7 +13,7 @@ import json
 import os
 import time
 
-from .model import CLIENT, action_space, post_json, validate_choice
+from .model import action_space, post_json, validate_choice
 from .questions import NEXT_ACTION, TARGET
 
 SYSTEM = """You control a web browser by choosing one operation and its target, from a fixed list.
@@ -153,8 +153,10 @@ def choose_openrouter(state, goal, history):
             answers = None
             # Retry once with the answer forced back to the required shape.
             body["messages"] = body["messages"][:2] + [
-                {"role": "assistant", "content": str(result.get("choices", [{}])[0].get("message", {}).get("content"))[:2000]},
-                {"role": "user", "content": "That was not a JSON object. Reply with the JSON object only, nothing else."},
+                {"role": "assistant",
+                 "content": str(result.get("choices", [{}])[0].get("message", {}).get("content"))[:2000]},
+                {"role": "user",
+                 "content": "That was not a JSON object. Reply with the JSON object only, nothing else."},
             ]
             body["response_format"] = {"type": "json_object"}
             time.sleep(0.4)
@@ -167,7 +169,9 @@ def choose_openrouter(state, goal, history):
     target_answer = None
     probabilities = {}
     if operation in targets:
-        target_answer = validate_choice(_repair(answers.get(operation.lower() + "_target", {}), targets[operation]), targets[operation])
+        target_answer = validate_choice(
+            _repair(answers.get(operation.lower() + "_target", {}), targets[operation]), targets[operation]
+        )
         target = target_answer["choice"]
         choice = targets[operation][target]["id"]
         probabilities = {a["id"]: target_answer["probabilities"][index] for index, a in targets[operation].items()}
