@@ -78,10 +78,23 @@ def action_space(actions):
     return elements, targets, controls
 
 
+def jev_route():
+    # A typesafe/* chooser model reaches Jev through OpenRouter's decisions route, which takes
+    # the same body and returns the same answers as TypeSafe's own endpoint.
+    chooser = os.environ.get("CHOOSER_MODEL", "")
+    if chooser.startswith("typesafe/"):
+        return "https://openrouter.ai/api/alpha/decisions", os.environ["CHOOSER_API_KEY"], chooser
+    return "https://api.typesafe.ai/v1/systemone", os.environ["TYPESAFE_API_KEY"], os.environ.get(
+        "TYPESAFE_MODEL", "jev-latest"
+    )
+
+
 def choose(state, goal, history):
     # Without a TypeSafe key, answer the same questions with one OpenAI-compatible call.
     # Same questions, same validation, still one request per decision.
-    if os.environ.get("CHOOSER_PROVIDER", "openrouter") == "openrouter" and not os.environ.get(
+    if not os.environ.get("CHOOSER_MODEL", "").startswith("typesafe/") and os.environ.get(
+        "CHOOSER_PROVIDER", "openrouter"
+    ) == "openrouter" and not os.environ.get(
         "TYPESAFE_API_KEY"
     ) and (os.environ.get("CHOOSER_API_KEY") or os.environ.get("TEXT_MODEL_API_KEY")):
         from .chooser_openrouter import choose_openrouter
@@ -112,8 +125,9 @@ def choose(state, goal, history):
             },
             "instructions": {"goal": goal, "operation": operation, "rules": [NEXT_ACTION, TARGET]},
         }
+    url, key, model = jev_route()
     body = {
-        "model": os.environ.get("TYPESAFE_MODEL", "jev-latest"),
+        "model": model,
         "state": {
             "page": {k: state[k] for k in ("url", "title", "text")},
             "elements": elements,
@@ -124,7 +138,7 @@ def choose(state, goal, history):
         "questions": questions,
     }
     started = time.perf_counter()
-    result = post_json("https://api.typesafe.ai/v1/systemone", os.environ["TYPESAFE_API_KEY"], body)
+    result = post_json(url, key, body)
     operation_answer = validate_choice(result["answers"].get("operation", {}), operations)
     operation = operation_answer["choice"]
     target = None

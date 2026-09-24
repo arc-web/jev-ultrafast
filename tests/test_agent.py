@@ -96,6 +96,23 @@ def test_all_heads_are_one_request_and_only_matching_head_executes(monkeypatch):
     assert set(calls[0]["questions"]) == {"operation", "click_target", "type_text_target"}
 
 
+def test_typesafe_chooser_model_uses_openrouter_decisions_route(monkeypatch):
+    calls = []
+
+    def post(url, key, body):
+        calls.append((url, key, body["model"]))
+        answer = choice(body["questions"]["operation"]["criteria"], "WAIT")
+        return {"model": body["model"], "answers": {"operation": answer}}
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("CHOOSER_MODEL", "typesafe/jev-1.13")
+    monkeypatch.setenv("CHOOSER_API_KEY", "router-key")
+    monkeypatch.setattr(model, "post_json", post)
+    d = model.choose(page(), "Find a book", [])
+    assert calls == [("https://openrouter.ai/api/alpha/decisions", "router-key", "typesafe/jev-1.13")]
+    assert d["operation"] == "WAIT" and d["model"] == "typesafe/jev-1.13"
+
+
 def test_click_cannot_consume_a_text_target(monkeypatch):
     def post(_url, _key, body):
         return {
