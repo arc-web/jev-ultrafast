@@ -114,7 +114,8 @@ class Agent:
                     self.pending_text = (context, text, helper)
                     state["text_calls"].append({**helper, "field": action["label"], "value": text})
             # Browser.act checks freshness immediately before input, including after text generation.
-            state["browser"].act(action, page, text=text)
+            act_result = state["browser"].act(action, page, text=text)
+            self.last_act = act_result if isinstance(act_result, dict) else {}
             self.pending_text = None
             state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
             # Record execution before observing. A stale post-action observation must not erase the action.
@@ -135,6 +136,7 @@ class Agent:
                     "page_changed": None,
                     "url": page["url"],
                     "usage": decision["usage"],
+                    "selector": getattr(self, "last_act", {}).get("selector"),
                     "executed_ms": round((time.perf_counter() - state["started_at"]) * 1000),
                     "elapsed_ms": state["elapsed_ms"],
                 }
