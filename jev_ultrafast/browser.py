@@ -27,10 +27,9 @@ class Browser:
         # Keep rAF/menus rendering in an owned background tab, without activating the user's Chrome tab.
         self.call("Emulation.setFocusEmulationEnabled", enabled=True)
         # The stock headless user agent advertises "HeadlessChrome"; present a normal one instead.
-        ua = os.environ.get(
-            "JEV_USER_AGENT",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
-        )
+        # A solved wall leaves the user agent that won its cookies; use that one so the two
+        # match, since the clearance cookie is bound to the user agent that earned it.
+        ua = os.environ.get("JEV_USER_AGENT") or _remembered_user_agent()
         if ua:
             self.call("Emulation.setUserAgentOverride", userAgent=ua, acceptLanguage="en-US,en;q=0.9", platform="MacIntel")
         self.call("Page.navigate", url=url)
@@ -120,6 +119,15 @@ class Browser:
             self.target = None
 
 
+def _remembered_user_agent():
+    """The user agent recorded when a wall was last unlocked, if any."""
+    try:
+        with open("/opt/data/state/browser-wall-ua.json") as fh:
+            return json.load(fh).get("user_agent") or None
+    except Exception:
+        return None
+
+
 def fingerprint(state):
     content = {k: state[k] for k in ("url", "text", "actions", "scroll")}
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
@@ -143,6 +151,9 @@ def browser_operation(request):
     if operation == "act":
         action = request["action"]
         kind = action["kind"]
+        # scroll and wait never resolve a target element; without this line the return
+        # statement below raises UnboundLocalError and the whole step dies.
+        target = None
         if kind == "scroll":
             call("Input.dispatchMouseEvent", type="mouseWheel", x=550, y=650, deltaX=0, deltaY=action["delta"])
         elif kind != "wait":
