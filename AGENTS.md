@@ -1,3 +1,5 @@
+ARC fork: read [CONTRIBUTING.md](CONTRIBUTING.md) first (ARC workflow, tests, release, public-repo rules).
+
 # Jev Ultrafast
 
 Read README.md before editing. Keep the loop small: page -> indexed elements -> operation + target -> execution.
