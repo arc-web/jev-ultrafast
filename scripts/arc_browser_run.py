@@ -37,6 +37,39 @@ def vault(path: str) -> str:
         return json.loads(r.read())["data"]["data"]["value"]
 
 
+def answer_from_page(goal: str, page_text: str, page_title: str, url: str) -> dict:
+    """One text-model call: the goal plus what the page actually said. Returns the words and the cost."""
+    import httpx
+
+    key = os.environ.get("TEXT_MODEL_API_KEY")
+    if not key or not page_text:
+        return {"text": "", "usage": None, "skipped": "no key or no page text"}
+    base = os.environ.get("TEXT_MODEL_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+    model = os.environ.get("ANSWER_MODEL") or os.environ.get("TEXT_MODEL", "inception/mercury-2.5")
+    body = {
+        "model": model,
+        "temperature": 0,
+        "messages": [
+            {"role": "system",
+             "content": "Answer the goal using only the page text given. Two sentences at most. "
+                        "The text begins with navigation, the brand and menus; the headline is the "
+                        "sentence right after them. Quote words exactly as they appear. "
+                        "If the page does not say, reply exactly: not on the page."},
+            {"role": "user",
+             "content": f"Goal: {goal}\n\nPage: {page_title} ({url})\n\nPage text:\n{page_text[:6000]}"},
+        ],
+    }
+    try:
+        r = httpx.post(base + "/chat/completions", json=body, timeout=45,
+                       headers={"Authorization": f"Bearer {key}"})
+        r.raise_for_status()
+        data = r.json()
+        return {"text": (data["choices"][0]["message"]["content"] or "").strip(),
+                "usage": data.get("usage"), "model": model}
+    except Exception as exc:
+        return {"text": "", "usage": None, "error": f"{type(exc).__name__}: {exc}"}
+
+
 def browser_up() -> bool:
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{CDP_PORT}/json/version", timeout=3) as r:
@@ -82,8 +115,14 @@ def main() -> int:
     ap.add_argument("--goal", required=True)
     ap.add_argument("--keep-browser", action="store_true", help="leave the browser running")
     ap.add_argument("--screenshots", action="store_true", help="save a frame per step")
+    ap.add_argument("--answer", dest="answer", action="store_true", default=True,
+                    help="after finishing, keep the page words and ask the text model for a short "
+                         "answer to the goal (default on)")
+    ap.add_argument("--no-answer", dest="answer", action="store_false")
     ap.add_argument("--chooser-model", default=os.environ.get("JEV_CHOOSER_MODEL", "qwen/qwen3.7-flash"))
     ap.add_argument("--text-model", default=os.environ.get("JEV_TEXT_MODEL", "inception/mercury-2.5"))
+    ap.add_argument("--answer-model", default=os.environ.get("JEV_ANSWER_MODEL", ""),
+                    help="model for the final answer; defaults to the text model")
     args = ap.parse_args()
 
     key = vault("hermes/openrouter-key")
@@ -96,6 +135,7 @@ def main() -> int:
             "TEXT_MODEL_API_KEY": key,
             "TEXT_MODEL_BASE_URL": "https://openrouter.ai/api/v1",
             "TEXT_MODEL": args.text_model,
+            "ANSWER_MODEL": args.answer_model,
             "TEXT_MODEL_REASONING": "none",
             "CHOOSER_API_KEY": key,
             "CHOOSER_BASE_URL": "https://openrouter.ai/api/v1",
@@ -112,7 +152,7 @@ def main() -> int:
     proc = start_browser()
     started = time.time()
     trace = {"url": args.url, "goal": args.goal, "started_at": datetime.now(timezone.utc).isoformat(), "steps": []}
-    status, last_title, last_url = "unknown", "", ""
+    status, last_title, last_url, last_text = "unknown", "", "", ""
     seen_steps = set()
     try:
         from jev_ultrafast import Agent
@@ -139,10 +179,12 @@ def main() -> int:
                             "usage": last.get("usage"),
                         }
                     )
-                    print(f"  {last['step']:>2}. {last['operation']:<9} {str(last['action'])[:70]} ({last['elapsed_ms']} ms)")
+                    shown = str(last["action"])[:70]
+                    print(f"  {last['step']:>2}. {last['operation']:<9} {shown} ({last['elapsed_ms']} ms)")
                 status = state["status"]
                 last_title = (state.get("page") or {}).get("title") or last_title
                 last_url = (state.get("page") or {}).get("url") or last_url
+                last_text = (state.get("page") or {}).get("text") or last_text
             trace["decisions"] = [
                 {"operation": d.get("operation"), "choice": d.get("choice"), "latency_ms": d.get("latency_ms"),
                  "usage": d.get("usage"), "model": d.get("model")}
@@ -164,6 +206,12 @@ def main() -> int:
     trace["page_title"] = last_title
     trace["final_url"] = last_url
     trace["wall_seconds"] = round(time.time() - started, 2)
+    trace["final_text"] = last_text[:6000]
+    answer = {"text": "", "usage": None}
+    if args.answer and last_text:
+        answer = answer_from_page(args.goal, last_text, last_title, last_url)
+        trace["answer"] = answer
+        print(f"answer: {answer['text'] or '(no words returned)'}")
     TRACE_DIR.mkdir(parents=True, exist_ok=True)
     path = TRACE_DIR / f"{int(started)}-{args.url.split('//')[-1].split('/')[0].replace('.', '-')}.json"
     path.write_text(json.dumps(trace, indent=2))
@@ -171,6 +219,7 @@ def main() -> int:
     print(json.dumps({
         "status": status, "steps": len(trace["steps"]), "wall_seconds": trace["wall_seconds"],
         "page_title": last_title, "final_url": last_url, "trace": str(path), "tokens_on_text_calls": tokens,
+        "answer": answer.get("text", ""),
     }))
     return 0 if status == "done" else 1
 
