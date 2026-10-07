@@ -1,7 +1,7 @@
 # Contributing to jev-ultrafast (ARC fork)
 
 For people and agents. Read this whole file before your first change here.
-Shared ARC rules (tasks, branches, PRs, secrets, release): [ARC contribution handbook](https://github.com/arc-web/arc-agent-fundamentals/blob/main/docs/contributing/HANDBOOK.md).
+Shared ARC rules (tasks, branches, PRs, secrets, release): [ARC contribution handbook](https://github.com/arc-web/agent-config/blob/main/handbook/HANDBOOK.md).
 
 This repository is a **public** fork of [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast).
 Anyone can read it. The upstream project's own guide is [README.md](README.md) and [AGENTS.md](AGENTS.md);
