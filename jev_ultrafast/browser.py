@@ -1,6 +1,7 @@
 """Observed actions through Browser Harness; one CDP session, no per-step subprocess."""
 
 import hashlib
+import os
 import json
 import sys
 import time
@@ -25,6 +26,12 @@ class Browser:
         self.call("Emulation.setDeviceMetricsOverride", width=1120, height=780, deviceScaleFactor=1, mobile=False)
         # Keep rAF/menus rendering in an owned background tab, without activating the user's Chrome tab.
         self.call("Emulation.setFocusEmulationEnabled", enabled=True)
+        # The stock headless user agent advertises "HeadlessChrome"; present a normal one instead.
+        # A solved wall leaves the user agent that won its cookies; use that one so the two
+        # match, since the clearance cookie is bound to the user agent that earned it.
+        ua = os.environ.get("JEV_USER_AGENT") or _remembered_user_agent()
+        if ua:
+            self.call("Emulation.setUserAgentOverride", userAgent=ua, acceptLanguage="en-US,en;q=0.9", platform="MacIntel")
         self.call("Page.navigate", url=url)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
@@ -41,7 +48,33 @@ class Browser:
             raise StalePage("Document changed during evaluation")
         return response.get("result", {}).get("value")
 
+    def _settle(self, deadline_s=6.0):
+        """Wait until the page stops changing before reading it.
+
+        An app shell reports readyState=complete long before it renders, so the first
+        observation of a single-page app saw an empty page and the run reported BLOCKED.
+        Poll the rendered text length until it holds still or the deadline passes.
+        """
+        deadline = time.monotonic() + deadline_s
+        last, stable = -1, 0
+        while time.monotonic() < deadline:
+            try:
+                size = self.evaluate("(document.body && document.body.innerText || '').length")
+            except Exception:
+                size = None
+            if isinstance(size, int):
+                if size == last:
+                    stable += 1
+                    if stable >= 2:
+                        return size
+                else:
+                    stable = 0
+                last = size
+            time.sleep(0.2)
+        return last if isinstance(last, int) else 0
+
     def observe(self, screenshot=True):
+        self._settle()
         if getattr(self, "after_input", None):
             action, self.after_input = self.after_input, None
             # This is read-only and happens after execution was logged, even if navigation interrupts it.
@@ -112,6 +145,15 @@ class Browser:
             self.target = None
 
 
+def _remembered_user_agent():
+    """The user agent recorded when a wall was last unlocked, if any."""
+    try:
+        with open("/opt/data/state/browser-wall-ua.json") as fh:
+            return json.load(fh).get("user_agent") or None
+    except Exception:
+        return None
+
+
 def fingerprint(state):
     content = {k: state[k] for k in ("url", "text", "actions", "scroll")}
     return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
@@ -135,6 +177,9 @@ def browser_operation(request):
     if operation == "act":
         action = request["action"]
         kind = action["kind"]
+        # scroll and wait never resolve a target element; without this line the return
+        # statement below raises UnboundLocalError and the whole step dies.
+        target = None
         if kind == "scroll":
             call("Input.dispatchMouseEvent", type="mouseWheel", x=550, y=650, deltaX=0, deltaY=action["delta"])
         elif kind != "wait":
@@ -142,6 +187,28 @@ def browser_operation(request):
                 raise ValueError("Invalid observed node")
             # Code-owned node IDs refer to actual observed elements, never model-generated selectors.
             target = evaluate("""(action => {
+              const replaySelector = e => {
+                if (!e) return null;
+                if (e.id && document.querySelectorAll('#' + CSS.escape(e.id)).length === 1) return '#' + CSS.escape(e.id);
+                const name = e.getAttribute('name');
+                if (name && e.tagName === 'INPUT') {
+                  const sel = e.tagName.toLowerCase() + '[name="' + name + '"]';
+                  if (document.querySelectorAll(sel).length === 1) return sel;
+                }
+                const aria = e.getAttribute('aria-label');
+                if (aria) {
+                  const sel = '[aria-label="' + aria.replace(/"/g, '\\"') + '"]';
+                  if (document.querySelectorAll(sel).length === 1) return sel;
+                }
+                // structural fallback: nth-of-type chain from body
+                let parts = [], node = e;
+                while (node && node.tagName && node !== document.body) {
+                  const idx = [...(node.parentElement?.children || [])].filter(c => c.tagName === node.tagName).indexOf(node) + 1;
+                  parts.unshift(node.tagName.toLowerCase() + ':nth-of-type(' + idx + ')');
+                  node = node.parentElement;
+                }
+                return 'body > ' + parts.join(' > ');
+              };
               const e=window.__jevFast?.nodes.get(action.node);
               if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]') ||
                   !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
@@ -156,7 +223,7 @@ def browser_operation(request):
                 e.dispatchEvent(new Event('input',{bubbles:true}));
                 e.dispatchEvent(new Event('change',{bubbles:true}));
               }
-              return {x,y};
+              return {x,y,selector: replaySelector(e),text: (e.innerText||e.value||"").trim().slice(0,80),tag: e.tagName};
             })(""" + json.dumps(action) + ")")
             if target is None:
                 if kind == "select":
@@ -183,7 +250,7 @@ def browser_operation(request):
                         modifiers=4 if sys.platform == "darwin" else 2,
                     )
                     call("Input.insertText", text=request["text"])
-        return {"executed": action["id"]}
+        return {"executed": action["id"], "selector": (target or {}).get("selector")}
 
     info = evaluate(READ_STATE)
     if info is None:
