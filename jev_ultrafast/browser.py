@@ -48,7 +48,33 @@ class Browser:
             raise StalePage("Document changed during evaluation")
         return response.get("result", {}).get("value")
 
+    def _settle(self, deadline_s=6.0):
+        """Wait until the page stops changing before reading it.
+
+        An app shell reports readyState=complete long before it renders, so the first
+        observation of a single-page app saw an empty page and the run reported BLOCKED.
+        Poll the rendered text length until it holds still or the deadline passes.
+        """
+        deadline = time.monotonic() + deadline_s
+        last, stable = -1, 0
+        while time.monotonic() < deadline:
+            try:
+                size = self.evaluate("(document.body && document.body.innerText || '').length")
+            except Exception:
+                size = None
+            if isinstance(size, int):
+                if size == last:
+                    stable += 1
+                    if stable >= 2:
+                        return size
+                else:
+                    stable = 0
+                last = size
+            time.sleep(0.2)
+        return last if isinstance(last, int) else 0
+
     def observe(self, screenshot=True):
+        self._settle()
         if getattr(self, "after_input", None):
             action, self.after_input = self.after_input, None
             # This is read-only and happens after execution was logged, even if navigation interrupts it.
